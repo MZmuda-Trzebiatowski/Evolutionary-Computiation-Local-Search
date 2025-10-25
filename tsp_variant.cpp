@@ -663,7 +663,7 @@ void export_tour_txt(const string &filename, const vector<int> &tour)
         }
         outfile << "\n";
         outfile.close();
-        cout << "  > Exported best tour indices to " << filename << " (TXT file).\n";
+        // cout << "  > Exported best tour indices to " << filename << " (TXT file).\n";
     }
     else
     {
@@ -695,36 +695,45 @@ int delta_V_E_exchange(const vector<int> &tour, int v_idx, int e_idx, const vect
 
 // Intra-route: Swap two selected nodes v_i and v_j
 int delta_swap(const vector<int> &tour, int i, int j, const vector<vector<int>> &d)
-{
-    if (i == j) return INT_MAX;
-    int m = tour.size();
-
-    if (i > j) std::swap(i, j);
-
-    int v_i = tour[i];
-    int v_j = tour[j];
-
-    int prev_i = tour[(i + m - 1) % m];
-    int next_i = tour[(i + 1) % m];
-
-    int prev_j = tour[(j + m - 1) % m];
-    int next_j = tour[(j + 1) % m];
-
-    int dist_delta = 0;
-
-    if (j == (i + 1) % m) // adjacent nodes
     {
-        dist_delta = (d[prev_i][v_j] + d[v_j][v_i] + d[v_i][next_j]) - 
-                     (d[prev_i][v_i] + d[v_i][v_j] + d[v_j][next_j]);
-    }
-    else // non-adjacent nodes
-    {
-        dist_delta = (d[prev_i][v_j] + d[v_j][next_i] + d[prev_j][v_i] + d[v_i][next_j]) - 
-                     (d[prev_i][v_i] + d[v_i][next_i] + d[prev_j][v_j] + d[v_j][next_j]);
-    }
+        if (i == j) return 0;
+        int m = tour.size();
 
-    return dist_delta;
-}
+        if (i > j) swap(i, j);
+
+        int v_i = tour[i];
+        int v_j = tour[j];
+
+        int dist_delta = 0;
+
+        if (abs(i - j) == 1) // adjacent nodes
+        {
+            int prev = (i - 1 + m) % m;
+            int next = (j + 1) % m;
+            dist_delta = (d[tour[prev]][v_j]  + d[v_i][tour[next]])
+                        - (d[tour[prev]][v_i] + d[v_j][tour[next]]);
+        }
+        else if ((i == 0 && j == m - 1))
+        {
+            int prev = (j - 1 + m) % m;
+            int next = (i + 1) % m;
+            dist_delta = (d[tour[prev]][v_i]  + d[v_j][tour[next]])
+                        - (d[tour[prev]][v_j] + d[v_i][tour[next]]);
+        }
+        else // non-adjacent nodes
+        {
+            int prev_i = tour[(i + m - 1) % m];
+            int next_i = tour[(i + 1) % m];
+
+            int prev_j = tour[(j + m - 1) % m];
+            int next_j = tour[(j + 1) % m];
+
+            dist_delta = (d[prev_i][v_j] + d[v_j][next_i] + d[prev_j][v_i] + d[v_i][next_j]) - 
+                        (d[prev_i][v_i] + d[v_i][next_i] + d[prev_j][v_j] + d[v_j][next_j]);
+        }
+
+        return dist_delta;
+    }
 
 // Intra-route: 2-opt, exchange edges (i, i+1) and (j, j+1)
 int delta_2opt(const vector<int> &tour, int i, int j, const vector<vector<int>> &d)
@@ -821,7 +830,7 @@ vector<int> local_search_steepest(vector<int> tour, const vector<vector<int>> &d
                 }
             }
         }
-        
+ 
         // 2. Intra-route: Swap OR 2-opt
         for (int i = 0; i < k; ++i)
         {
@@ -850,7 +859,7 @@ vector<int> local_search_steepest(vector<int> tour, const vector<vector<int>> &d
                 }
             }
         }
-        
+
         if (best_move.delta >= 0)
         {
             break;
@@ -871,6 +880,7 @@ vector<int> local_search_steepest(vector<int> tour, const vector<vector<int>> &d
         {
             apply_2opt(tour, best_move.i, best_move.j);
         }
+        // cout << "applied move type " << best_move.type << " with delta " << best_move.delta << " moves: " << best_move.i << ", " << best_move.j << "\n";
     }
     return tour;
 }
@@ -879,6 +889,66 @@ vector<int> local_search_steepest(vector<int> tour, const vector<vector<int>> &d
 vector<int> local_search_greedy(vector<int> tour, const vector<vector<int>> &d, const vector<Node> &nodes, bool use_swap_intra)
 {
     return tour;
+}
+
+// --- Experiment Helper functions ---
+vector<int> get_greedy_start(int start_node, int k, const vector<vector<int>> &d, const vector<Node> &nodes)
+{
+    return nn_anypos(start_node, k, d, nodes);
+}
+
+void run_local_search_experiment(const string& name, bool steepest, bool use_swap, bool random_start, int n, int k, const vector<vector<int>> &d, const vector<Node> &nodes)
+{
+    const int N_RUNS = 200;
+    vector<int> objectives;
+    int best_obj = INT_MAX;
+    vector<int> best_tour;
+
+    mt19937 rand_start_rng{6767};
+
+    for (int t = 0; t < N_RUNS; t++)
+    {
+        vector<int> start_tour;
+        if (random_start)
+        {
+            start_tour = random_solution(n, k);
+
+        }
+        else
+        {
+            int start_node = t % n;
+            start_tour = get_greedy_start(start_node, k, d, nodes);
+        }
+
+        vector<int> final_tour;
+        if (steepest)
+        {
+            final_tour = local_search_steepest(start_tour, d, nodes, use_swap);
+        }
+        else
+        {
+            final_tour = local_search_greedy(start_tour, d, nodes, use_swap);
+        }
+
+        int obj = tour_objective(final_tour, d, nodes);
+        objectives.push_back(obj);
+
+        if (obj < best_obj)
+        {
+            best_obj = obj;
+            best_tour = final_tour;
+        }
+    }
+    
+    string ls_type = steepest ? "Steepest" : "Greedy";
+    string intra_type = use_swap ? "Swap" : "2-opt";
+    string start_type = random_start ? "Random_INIT" : "Greedy_INIT";
+    
+    string full_name = ls_type + "_" + intra_type + "_" + start_type;
+    
+    print_stats("Local Search (" + full_name + ")", objectives);
+    export_tour_svg("best_ls_" + full_name + "_tour.svg", best_tour, nodes);
+    export_tour_txt("best_ls_" + full_name + "_tour.txt", best_tour);
 }
 
 // ------------------------------------- MAIN FUNCTION ------------------------------------ //
@@ -902,4 +972,21 @@ int main(int argc, char **argv)
     cout << "Read " << n << " nodes; selecting k = " << k << " nodes per solution.\n";
 
     auto d = compute_distance_matrix(nodes);
+
+    for (int ls_type = 0; ls_type < 2; ++ls_type) // 0: Steepest, 1: Greedy
+    {
+        bool steepest = true;
+        
+        for (int intra_type = 0; intra_type < 2; ++intra_type) // 0: Swap, 1: 2-opt
+        {
+            bool use_swap = (intra_type == 0);
+            
+            for (int start_type = 0; start_type < 2; ++start_type) // 0: Random, 1: Greedy
+            {
+                bool random_start = (start_type == 0);
+                
+                run_local_search_experiment("", steepest, use_swap, random_start, n, k, d, nodes);
+            }
+        }
+    }
 }

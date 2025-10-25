@@ -785,8 +785,121 @@ void apply_2opt(vector<int> &tour, int i, int j)
     }
 }
 
+// --- Local Search Functions ---
+
+// Local Search steepest
+vector<int> local_search_steepest(vector<int> tour, const vector<vector<int>> &d, const vector<Node> &nodes, bool use_swap_intra)
+{
+    int n = d.size();
+    int k = tour.size();
+    
+    mt19937 rng{random_device{}()};
+
+    vector<bool> is_selected(n, false);
+    for(int v : tour) is_selected[v] = true;
+    
+    while (true)
+    {
+        Move best_move;
+        best_move.delta = 0;
+        
+        // 1. Inter-route: V-E Exchange
+        for (int i = 0; i < k; ++i)
+        {
+            for (int j = 0; j < n; ++j) 
+            {
+                if (is_selected[j]) continue;
+                
+                int delta = delta_V_E_exchange(tour, i, j, d, nodes);
+                
+                if (delta < best_move.delta)
+                {
+                    best_move.delta = delta;
+                    best_move.type = 0; // V-E
+                    best_move.i = i; 
+                    best_move.j = j; 
+                }
+            }
+        }
+        
+        // 2. Intra-route: Swap OR 2-opt
+        for (int i = 0; i < k; ++i)
+        {
+            for (int j = i + 1; j < k; ++j)
+            {
+                int delta = INT_MAX;
+                int move_type = -1;
+
+                if (use_swap_intra)
+                {
+                    delta = delta_swap(tour, i, j, d);
+                    move_type = 1; // Swap
+                }
+                else
+                {
+                    delta = delta_2opt(tour, i, j, d);
+                    move_type = 2; // 2-opt
+                }
+                
+                if (delta < best_move.delta)
+                {
+                    best_move.delta = delta;
+                    best_move.type = move_type;
+                    best_move.i = i;
+                    best_move.j = j;
+                }
+            }
+        }
+        
+        if (best_move.delta >= 0)
+        {
+            break;
+        }
+
+        if (best_move.type == 0)
+        {
+            int removed_node = tour[best_move.i];
+            apply_V_E_exchange(tour, best_move.i, best_move.j);
+            is_selected[removed_node] = false;
+            is_selected[best_move.j] = true;
+        }
+        else if (best_move.type == 1)
+        {
+            apply_swap(tour, best_move.i, best_move.j);
+        }
+        else if (best_move.type == 2)
+        {
+            apply_2opt(tour, best_move.i, best_move.j);
+        }
+    }
+    return tour;
+}
+
+// Local Search greedy
+vector<int> local_search_greedy(vector<int> tour, const vector<vector<int>> &d, const vector<Node> &nodes, bool use_swap_intra)
+{
+    return tour;
+}
+
 // ------------------------------------- MAIN FUNCTION ------------------------------------ //
 int main(int argc, char **argv)
 {
-    
+    if (argc < 2)
+    {
+        cerr << "Usage: " << argv[0] << " <instance-file>\n";
+        return 1;
+    }
+    string fname = argv[1];
+    vector<Node> nodes = read_instance(fname);
+    int n = nodes.size();
+    if (n == 0)
+    {
+        cerr << "No nodes read from file.\n";
+        return 1;
+    }
+
+    int k = (n + 1) / 2; // half of the nodes, rounded up
+    cout << "Read " << n << " nodes; selecting k = " << k << " nodes per solution.\n";
+
+    auto d = compute_distance_matrix(nodes);
 }

@@ -9,6 +9,7 @@
 #include <climits>
 #include <numeric>
 #include <random>
+#include <chrono>
 
 using namespace std;
 
@@ -627,7 +628,7 @@ void export_tour_svg(const string &filename, const vector<int> &tour, const vect
     // cout << "SVG visualization saved to: " << filename << "\n";
 }
 
-void print_stats(const string &heuristic_name, const vector<int> &objectives)
+void print_stats(const string &heuristic_name, const vector<int> &objectives, double total_time_ms)
 {
     if (objectives.empty())
     {
@@ -640,12 +641,20 @@ void print_stats(const string &heuristic_name, const vector<int> &objectives)
 
     long double sum_obj = accumulate(objectives.begin(), objectives.end(), (long double)0.0);
     long double avg_obj = sum_obj / objectives.size();
+    
+    // Time statistics
+    long double avg_time_ms = total_time_ms / objectives.size();
 
-    cout << "\n " << heuristic_name << " Stats\n";
+    cout << "\n=========================================================\n";
+    cout << " " << heuristic_name << " Stats\n";
+    cout << "=========================================================\n";
     cout << "  Min Objective: " << min_obj << "\n";
     cout << "  Max Objective: " << max_obj << "\n";
     cout << "  Avg Objective: " << avg_obj << "\n";
     cout << "------------------------------------------\n";
+    cout << "  Total Running Time: " << total_time_ms / 1000.0 << " s\n";
+    cout << "  Avg Time per Run: " << avg_time_ms << " ms\n";
+    cout << "=========================================================\n";
 }
 
 void export_tour_txt(const string &filename, const vector<int> &tour)
@@ -888,13 +897,125 @@ vector<int> local_search_steepest(vector<int> tour, const vector<vector<int>> &d
 // Local Search greedy
 vector<int> local_search_greedy(vector<int> tour, const vector<vector<int>> &d, const vector<Node> &nodes, bool use_swap_intra)
 {
+    int n = d.size();
+    int k = tour.size();
+
+    mt19937 rng(random_device{}());
+
+    vector<bool> is_selected(n, false);
+    for(int v : tour) is_selected[v] = true;
+
+    while (true)
+    {
+        bool improved_in_iteration = false;
+
+        // Setup indices for random iteration over tour nodes
+        vector<int> tour_indices(k);
+        iota(tour_indices.begin(), tour_indices.end(), 0);
+
+        vector<int> unselected_nodes;
+        for (int i = 0; i < n; ++i)
+        {
+            if (!is_selected[i])
+                unselected_nodes.push_back(i);
+        }
+
+        // Random order of neighborhood types (0: Inter, 1: Intra)
+        vector<int> neighborhood_order = {0, 1};
+        shuffle(neighborhood_order.begin(), neighborhood_order.end(), rng);
+
+        for (int move_type_code : neighborhood_order)
+        {
+            if (move_type_code == 0)
+            {
+                shuffle(tour_indices.begin(), tour_indices.end(), rng); // Random order for selected node
+                shuffle(unselected_nodes.begin(), unselected_nodes.end(), rng); // Random order for unselected node
+
+                for (int i : tour_indices)
+                {
+                    for (int u : unselected_nodes)
+                    {
+                        int delta = delta_V_E_exchange(tour, i, u, d, nodes);
+
+                        if (delta < 0)
+                        {
+                            // Found the first improving move (Greedy Acceptance)
+                            int removed_node = tour[i];
+                            apply_V_E_exchange(tour, i, u); 
+                            
+                            is_selected[removed_node] = false;
+                            is_selected[u] = true;
+                            
+                            improved_in_iteration = true;
+                            goto next_iteration; 
+                        }
+                    }
+                }
+            }
+            else 
+            {
+                shuffle(tour_indices.begin(), tour_indices.end(), rng); // Random order for 'i'
+
+                for (int i : tour_indices)
+                {
+                    vector<int> j_indices;
+                    for (int l = i + 1; l < k; ++l)
+                        j_indices.push_back(l);
+                    shuffle(j_indices.begin(), j_indices.end(), rng);
+
+                    for (int j : j_indices)
+                    {
+                        int delta = INT_MAX;
+                        int applied_type = -1;
+
+                        if (use_swap_intra)
+                        {
+                            delta = delta_swap(tour, i, j, d);
+                            applied_type = 1; // Swap
+                        }
+                        else
+                        {
+                            delta = delta_2opt(tour, i, j, d);
+                            applied_type = 2; // 2-opt
+                        }
+
+                        if (delta < 0)
+                        {
+                            // Found the first improving move (Greedy Acceptance)
+                            if (applied_type == 1)
+                            {
+                                apply_swap(tour, i, j);
+                            }
+                            else if (applied_type == 2)
+                            {
+                                apply_2opt(tour, i, j);
+                            }
+
+                            improved_in_iteration = true;
+                            goto next_iteration; // Found improvement, break inner loops and restart main loop
+                        }
+                    }
+                }
+                
+            }
+        }
+
+    next_iteration:; // Label for breaking out of nested loops
+
+        // Check the stopping condition
+        if (!improved_in_iteration)
+        {
+            // No improving move was found in the complete iteration over all neighborhoods
+            break; 
+        }
+    }
     return tour;
 }
 
 // --- Experiment Helper functions ---
 vector<int> get_greedy_start(int start_node, int k, const vector<vector<int>> &d, const vector<Node> &nodes)
 {
-    return nn_anypos(start_node, k, d, nodes);
+    return nn_anypos_regret(start_node, k, d, nodes, 0.5, 0.5);
 }
 
 void run_local_search_experiment(const string& name, bool steepest, bool use_swap, bool random_start, int n, int k, const vector<vector<int>> &d, const vector<Node> &nodes)
@@ -905,6 +1026,8 @@ void run_local_search_experiment(const string& name, bool steepest, bool use_swa
     vector<int> best_tour;
 
     mt19937 rand_start_rng{6767};
+
+    auto total_start = chrono::high_resolution_clock::now();
 
     for (int t = 0; t < N_RUNS; t++)
     {
@@ -939,6 +1062,10 @@ void run_local_search_experiment(const string& name, bool steepest, bool use_swa
             best_tour = final_tour;
         }
     }
+
+    auto total_end = chrono::high_resolution_clock::now();
+    auto total_duration = chrono::duration_cast<chrono::milliseconds>(total_end - total_start);
+    double total_time_ms = total_duration.count();
     
     string ls_type = steepest ? "Steepest" : "Greedy";
     string intra_type = use_swap ? "Swap" : "2-opt";
@@ -946,7 +1073,7 @@ void run_local_search_experiment(const string& name, bool steepest, bool use_swa
     
     string full_name = ls_type + "_" + intra_type + "_" + start_type;
     
-    print_stats("Local Search (" + full_name + ")", objectives);
+    print_stats("Local Search (" + full_name + ")", objectives, total_time_ms);
     export_tour_svg("best_ls_" + full_name + "_tour.svg", best_tour, nodes);
     export_tour_txt("best_ls_" + full_name + "_tour.txt", best_tour);
 }
@@ -975,7 +1102,7 @@ int main(int argc, char **argv)
 
     for (int ls_type = 0; ls_type < 2; ++ls_type) // 0: Steepest, 1: Greedy
     {
-        bool steepest = true;
+        bool steepest = (ls_type == 0);
         
         for (int intra_type = 0; intra_type < 2; ++intra_type) // 0: Swap, 1: 2-opt
         {
